@@ -38,7 +38,7 @@ class MoviesAPI extends SWRDataSource<MovieArg, Movie, Context> {
   }
 
   async getMovie(movieId: string) {
-    return this.get(movieId);
+    return this.doSWR(movieId); // <-- call doSWR here
   }
 }
 
