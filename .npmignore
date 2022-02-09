@@ -1,0 +1,8 @@
+__tests__
+.github
+tsconfig.json
+jest.config.js
+src
+*.test.d.ts
+*.test.js
+*.log
