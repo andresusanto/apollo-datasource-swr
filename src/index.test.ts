@@ -4,17 +4,14 @@ import { SWRDataSource } from ".";
 test("performing revalidation when calling doSWR", async () => {
   const onRevalidate = jest.fn().mockImplementation(async (_, a) => "foo-" + a);
 
-  class TestClassA extends SWRDataSource<[string, number], string, string> {
-    protected async onRevalidate(
-      ctx: any,
-      a: string,
-      b: number
-    ): Promise<string> {
-      return onRevalidate(ctx, a, b);
+  class TestClassA extends SWRDataSource<string> {
+    public async tester() {
+      console.log(this);
     }
 
+    @SWRDataSource.useSWR
     public async testMethod(a: string, b: number) {
-      return this.doSWR(a, b);
+      return onRevalidate(this.context, a, b);
     }
   }
 
@@ -40,17 +37,10 @@ test("using stale data on subsequent request with the same key", async () => {
         new Promise((res) => setTimeout(() => res(`${requestNumber++}`), 100))
     );
 
-  class TestClassB extends SWRDataSource<[string, number], string, string> {
-    protected async onRevalidate(
-      ctx: any,
-      a: string,
-      b: number
-    ): Promise<string> {
-      return onRevalidate(ctx, a, b);
-    }
-
+  class TestClassB extends SWRDataSource<string> {
+    @SWRDataSource.useSWR
     public async testMethod(a: string, b: number) {
-      return this.doSWR(a, b);
+      return onRevalidate(this.context, a, b);
     }
   }
 
@@ -78,37 +68,33 @@ test("isolating cache and inflight-deduper for different subclasses", async () =
     .mockImplementation(
       () => new Promise((res) => setTimeout(() => res("C"), 100))
     );
-  const onRevalidateD = jest
+  const onRevalidateD_A = jest
     .fn()
     .mockImplementation(
-      () => new Promise((res) => setTimeout(() => res("D"), 100))
+      () => new Promise((res) => setTimeout(() => res("DA"), 100))
+    );
+  const onRevalidateD_B = jest
+    .fn()
+    .mockImplementation(
+      () => new Promise((res) => setTimeout(() => res("DB"), 100))
     );
 
-  class TestClassC extends SWRDataSource<[string, number], string, string> {
-    protected async onRevalidate(
-      ctx: any,
-      a: string,
-      b: number
-    ): Promise<string> {
-      return onRevalidateC(ctx, a, b);
-    }
-
+  class TestClassC extends SWRDataSource<string> {
+    @SWRDataSource.useSWR
     public async testMethod(a: string, b: number) {
-      return this.doSWR(a, b);
+      return onRevalidateC(this.context, a, b);
     }
   }
 
-  class TestClassD extends SWRDataSource<[string, number], string, string> {
-    protected async onRevalidate(
-      ctx: any,
-      a: string,
-      b: number
-    ): Promise<string> {
-      return onRevalidateD(ctx, a, b);
+  class TestClassD extends SWRDataSource<string> {
+    @SWRDataSource.useSWR
+    public async testMethodA(a: string, b: number) {
+      return onRevalidateD_A(this.context, a, b);
     }
 
-    public async testMethod(a: string, b: number) {
-      return this.doSWR(a, b);
+    @SWRDataSource.useSWR
+    public async testMethodB(a: string, b: number) {
+      return onRevalidateD_B(this.context, a, b);
     }
   }
 
@@ -120,17 +106,23 @@ test("isolating cache and inflight-deduper for different subclasses", async () =
   testClassD.initialize({ context: "ctx", cache });
 
   await expect(testClassC.testMethod("a", 2)).resolves.toEqual("C");
-  await expect(testClassD.testMethod("a", 2)).resolves.toEqual("D");
+  await expect(testClassD.testMethodA("a", 2)).resolves.toEqual("DA");
+  await expect(testClassD.testMethodB("a", 2)).resolves.toEqual("DB");
   expect(onRevalidateC).toBeCalledTimes(1);
   expect(onRevalidateC).toBeCalledWith("ctx", "a", 2);
-  expect(onRevalidateD).toBeCalledTimes(1);
-  expect(onRevalidateD).toBeCalledWith("ctx", "a", 2);
+  expect(onRevalidateD_A).toBeCalledTimes(1);
+  expect(onRevalidateD_A).toBeCalledWith("ctx", "a", 2);
+  expect(onRevalidateD_B).toBeCalledTimes(1);
+  expect(onRevalidateD_B).toBeCalledWith("ctx", "a", 2);
 
   // using stale data on subsequent request with the same key
   await expect(testClassC.testMethod("a", 2)).resolves.toEqual("C");
-  await expect(testClassD.testMethod("a", 2)).resolves.toEqual("D");
+  await expect(testClassD.testMethodA("a", 2)).resolves.toEqual("DA");
+  await expect(testClassD.testMethodB("a", 2)).resolves.toEqual("DB");
   expect(onRevalidateC).toBeCalledTimes(1);
   expect(onRevalidateC).toBeCalledWith("ctx", "a", 2);
-  expect(onRevalidateD).toBeCalledTimes(1);
-  expect(onRevalidateD).toBeCalledWith("ctx", "a", 2);
+  expect(onRevalidateD_A).toBeCalledTimes(1);
+  expect(onRevalidateD_A).toBeCalledWith("ctx", "a", 2);
+  expect(onRevalidateD_B).toBeCalledTimes(1);
+  expect(onRevalidateD_B).toBeCalledWith("ctx", "a", 2);
 });

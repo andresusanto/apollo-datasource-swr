@@ -10,7 +10,13 @@ const silentLogger: Logger = {
   error: () => {},
 };
 
-export type InflightDeduper = Record<string, Promise<any>>;
+type InflightDeduper = Record<string, Promise<any>>;
+type FnArg = Array<any>;
+type Fn = (...args: FnArg) => Promise<any>;
+
+interface SWRPropertyDescriptor extends PropertyDescriptor {
+  value?: Fn;
+}
 
 export type SWROptions = {
   /** Maximum number of seconds in which the data can live in cache, defaults to 1 hr */
@@ -20,11 +26,7 @@ export type SWROptions = {
   logger?: Logger;
 };
 
-export abstract class SWRDataSource<
-  TArg extends Array<any>,
-  TResult,
-  TContext = any
-> extends DataSource {
+export abstract class SWRDataSource<TContext = any> extends DataSource {
   public context!: TContext;
 
   private static inflightDeduper: InflightDeduper = {};
@@ -48,15 +50,18 @@ export abstract class SWRDataSource<
     this.cache = config.cache || new InMemoryLRUCache({ maxSize: 1000 });
   }
 
-  /**
-   * Revalidate the current request. This method must be implemented by the
-   * child class.
-   *
-   * @param ctx The apollo context of the request
-   * @param args Function arguments needed to perform revalidation
-   */
-  protected async onRevalidate(ctx: TContext, ...args: TArg): Promise<TResult> {
-    throw new Error("onRevalidate: Method not implemented.");
+  protected static useSWR(
+    target: SWRDataSource,
+    propertyKey: string,
+    d: SWRPropertyDescriptor
+  ) {
+    const fn = d.value;
+    if (typeof fn !== "function")
+      throw new Error("SWRDataSource.useSWR() requires a function");
+
+    d.value = function _useSWR(...args: FnArg) {
+      return target.doSWR.call(this, fn.bind(this), propertyKey, ...args);
+    };
   }
 
   /**
@@ -65,17 +70,21 @@ export abstract class SWRDataSource<
    * @param ctx The apollo context of the request
    * @param args Function arguments passed to the revalidation fn
    */
-  protected async doSWR(...args: TArg): Promise<TResult> {
-    const cacheKey = `${SWRDataSource.name}:${this.constructor.name}:${sha1(
-      args
-    )}`;
+  private async doSWR(
+    fn: Fn,
+    propertyKey: string,
+    ...args: FnArg
+  ): Promise<any> {
+    const cacheKey = `${SWRDataSource.name}:${
+      this.constructor.name
+    }:${propertyKey}:${sha1(args)}`;
 
     this.logger.debug(`Getting stale item with cache-key ${cacheKey}`);
     const stale = await this.cache.get(cacheKey);
     if (stale !== undefined) {
       // instead of making current IO Loop process the fn,
       // we put `revalidate` into the queue instead
-      setImmediate(() => this.revalidate(cacheKey, this.context, ...args));
+      setImmediate(() => this.revalidate(cacheKey, fn, ...args));
 
       this.logger.debug(
         `Found stale item with cache-key ${cacheKey}! Returning Immediately.`
@@ -85,11 +94,11 @@ export abstract class SWRDataSource<
     this.logger.debug(
       `NOT Found stale item with cache-key ${cacheKey}. Waiting for revalidation.`
     );
-    const fresh = await this.revalidate(cacheKey, this.context, ...args);
+    const fresh = await this.revalidate(cacheKey, fn, ...args);
     return fresh;
   }
 
-  private async revalidate(cacheKey: string, ctx: TContext, ...args: TArg) {
+  private async revalidate(cacheKey: string, fn: Fn, ...args: FnArg) {
     this.logger.debug(`Performing revalidation for ${cacheKey}.`);
     const inflight = SWRDataSource.inflightDeduper[cacheKey];
     if (inflight) {
@@ -100,9 +109,9 @@ export abstract class SWRDataSource<
     }
 
     this.logger.debug(
-      `NOT found inflight request for ${cacheKey}. Making a new onRevalidate call.`
+      `NOT found inflight request for ${cacheKey}. Making an underlying function call.`
     );
-    const promise = this.onRevalidate(ctx, ...args);
+    const promise = fn(...args);
     SWRDataSource.inflightDeduper[cacheKey] = promise;
 
     const result = await promise;
