@@ -17,13 +17,24 @@ npm i -S apollo-datasource-swr
 
 ## Usage
 
+Make sure to enable decorator support by adding this line in your `tsconfig.json`:
+
+```jsonc
+{
+  "compilerOptions": {
+    "experimentalDecorators": true,    // <-- add this
+    ...
+  },
+}
+```
+
 ```ts
 import fetch from "node-fetch";
-import { SWRDataSource } from "apollo-datasource-swr";
+import { UserInputError } from "apollo-server-express";
+import { SWRDataSource } from "apollo-datasource-swr"; // <-- import SWRDataSource
 
 // datasources/movies.ts
-type MovieArg = [movieId: string];
-class MoviesAPI extends SWRDataSource<MovieArg, Movie, Context> {
+class MoviesAPI extends SWRDataSource<Context> {
   private endpoint: string;
 
   constructor(endpoint: string) {
@@ -31,17 +42,27 @@ class MoviesAPI extends SWRDataSource<MovieArg, Movie, Context> {
     this.endpoint = endpoint;
   }
 
-  protected async onRevalidate(ctx: Context, movieId: string): Promise<Movie> {
+  @SWRDataSource.useSWR // <-- add this decorator to your fetcher
+  async getMovie(movieId: string) {
     const res = await fetch(`${this.endpoint}/movies/${movieId}`);
     const body = await res.json();
     return body as Movie;
   }
 
-  async getMovie(movieId: string) {
-    return this.doSWR(movieId); // <-- call doSWR here
+  @SWRDataSource.useSWR // <-- add as many methods as you like!
+  async getTheatre(theatreId: string) {
+    // Apollo request context is available: this.context
+    if (!this.context.auth) {
+      throw new UserInputError("Not authenticated");
+    }
+
+    const res = await fetch(`${this.endpoint}/theatre/${theatreId}`);
+    const body = await res.json();
+    return body as Theatre;
   }
 }
 
+// -------------
 // main.ts
 // use the data source:
 const server = new ApolloServer({
@@ -49,7 +70,7 @@ const server = new ApolloServer({
   resolvers,
   dataSources: () => {
     return {
-      moviesAPI: new MoviesAPI(),
+      moviesAPI: new MoviesAPI(), // <-- add it in your Apollo Server
     };
   },
 });
