@@ -1,3 +1,4 @@
+import { Logger } from "apollo-server-types";
 import { InMemoryLRUCache } from "apollo-server-caching";
 import { SWRDataSource } from ".";
 
@@ -230,4 +231,70 @@ test("should not serve stale item when it is older than the stale period", async
 
   expect(onRevalidate).toBeCalledTimes(2);
   expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+});
+
+test("using object logger", async () => {
+  const objLogger: Logger = {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  };
+
+  const onRevalidate = jest.fn().mockImplementation(async (_, a) => "foo-" + a);
+
+  class TestClassG extends SWRDataSource<string> {
+    constructor() {
+      super({
+        logger: objLogger,
+      });
+    }
+
+    @SWRDataSource.useSWR
+    public async testMethod(a: string, b: number) {
+      return onRevalidate(this.context, a, b);
+    }
+  }
+
+  const testClass = new TestClassG();
+  testClass.initialize({ context: "ctx", cache: new InMemoryLRUCache() });
+
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("foo-a");
+  expect(onRevalidate).toBeCalledTimes(1);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+
+  expect(objLogger.debug).toBeCalledTimes(5);
+});
+
+test("using function logger", async () => {
+  const objLogger: Logger = {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  };
+
+  const onRevalidate = jest.fn().mockImplementation(async (_, a) => "foo-" + a);
+
+  class TestClassH extends SWRDataSource<string> {
+    constructor() {
+      super({
+        logger: () => objLogger,
+      });
+    }
+
+    @SWRDataSource.useSWR
+    public async testMethod(a: string, b: number) {
+      return onRevalidate(this.context, a, b);
+    }
+  }
+
+  const testClass = new TestClassH();
+  testClass.initialize({ context: "ctx", cache: new InMemoryLRUCache() });
+
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("foo-a");
+  expect(onRevalidate).toBeCalledTimes(1);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+
+  expect(objLogger.debug).toBeCalledTimes(5);
 });

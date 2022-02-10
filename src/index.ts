@@ -27,7 +27,7 @@ export type SWROptions = {
   ttlSWR?: number;
 
   /** Logger fn, defaults to silent logger */
-  logger?: Logger;
+  logger?: Logger | (() => Logger);
 };
 
 export abstract class SWRDataSource<TContext = any> extends DataSource {
@@ -37,13 +37,19 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
   private cache!: KeyValueCache;
   private ttlSWR: number;
   private ttlMaxAge: number;
-  private logger: Logger;
+  private logger: () => Logger;
 
   constructor(opts?: SWROptions) {
     super();
     this.ttlSWR = opts?.ttlSWR ?? 3600;
     this.ttlMaxAge = opts?.ttlMaxAge ?? 0;
-    this.logger = opts?.logger ?? silentLogger;
+
+    const logger = opts?.logger ?? silentLogger;
+    if (typeof logger === "function") {
+      this.logger = logger;
+    } else {
+      this.logger = () => logger;
+    }
   }
 
   /**
@@ -85,7 +91,7 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
       this.constructor.name
     }:${propertyKey}:${sha1(args)}`;
 
-    this.logger.debug(`Getting stale item with cache-key ${cacheKey}`);
+    this.logger().debug(`Getting stale item with cache-key ${cacheKey}`);
     const cached = await this.cache.get(cacheKey);
     if (cached !== undefined) {
       const item: CacheItem = JSON.parse(cached);
@@ -96,18 +102,18 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
         // the 'revalidate' fn, we put the fn into
         // the queue, and process it after this tick
         setImmediate(() => this.revalidate(cacheKey, fn, ...args));
-        this.logger.debug(
+        this.logger().debug(
           `Found stale item with cache-key ${cacheKey}! Will perform revalidation.`
         );
       } else {
-        this.logger.debug(
+        this.logger().debug(
           `Found fresh item with cache-key ${cacheKey}! Will return without performing revalidation.`
         );
       }
 
       return item.item;
     }
-    this.logger.debug(
+    this.logger().debug(
       `NOT Found cached item with cache-key ${cacheKey}. Waiting for revalidation.`
     );
     const fresh = await this.revalidate(cacheKey, fn, ...args);
@@ -115,16 +121,16 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
   }
 
   private async revalidate(cacheKey: string, fn: Fn, ...args: FnArg) {
-    this.logger.debug(`Performing revalidation for ${cacheKey}.`);
+    this.logger().debug(`Performing revalidation for ${cacheKey}.`);
     const inflight = SWRDataSource.inflightDeduper[cacheKey];
     if (inflight) {
-      this.logger.debug(
+      this.logger().debug(
         `Found inflight request for ${cacheKey}. Reusing the inflight instead of making a new one.`
       );
       return inflight;
     }
 
-    this.logger.debug(
+    this.logger().debug(
       `NOT found inflight request for ${cacheKey}. Making an underlying function call.`
     );
     const promise = fn(...args);
@@ -139,7 +145,7 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
       ttl: this.ttlMaxAge + this.ttlSWR,
     });
     delete SWRDataSource.inflightDeduper[cacheKey];
-    this.logger.debug(
+    this.logger().debug(
       `Revalidation for ${cacheKey} completed. Returning result.`
     );
     return result;
