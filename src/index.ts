@@ -13,14 +13,18 @@ const silentLogger: Logger = {
 type InflightDeduper = Record<string, Promise<any>>;
 type FnArg = Array<any>;
 type Fn = (...args: FnArg) => Promise<any>;
+type CacheItem = { exp: number; item: any };
 
 interface SWRPropertyDescriptor extends PropertyDescriptor {
   value?: Fn;
 }
 
 export type SWROptions = {
-  /** Maximum number of seconds in which the data can live in cache, defaults to 1 hr */
-  maxTTL?: number;
+  /** Duration of which object is considered fresh in seconds. Defaults to 0. See https://datatracker.ietf.org/doc/html/rfc5861#section-3.1 for details and example. */
+  ttlMaxAge?: number;
+
+  /** Maximum duration of which object can be served after it has become stale in seconds. Defaults to 1 hr. See https://datatracker.ietf.org/doc/html/rfc5861#section-3.1 for details and example. */
+  ttlSWR?: number;
 
   /** Logger fn, defaults to silent logger */
   logger?: Logger;
@@ -31,12 +35,14 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
 
   private static inflightDeduper: InflightDeduper = {};
   private cache!: KeyValueCache;
-  private maxTTL: number;
+  private ttlSWR: number;
+  private ttlMaxAge: number;
   private logger: Logger;
 
   constructor(opts?: SWROptions) {
     super();
-    this.maxTTL = opts?.maxTTL ?? 3600;
+    this.ttlSWR = opts?.ttlSWR ?? 3600;
+    this.ttlMaxAge = opts?.ttlMaxAge ?? 0;
     this.logger = opts?.logger ?? silentLogger;
   }
 
@@ -50,6 +56,12 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
     this.cache = config.cache || new InMemoryLRUCache({ maxSize: 1000 });
   }
 
+  /**
+   * Hook to be used by the class extending this class to define methods
+   * using SWR.
+   *
+   * See README.md for more details.
+   */
   protected static useSWR(
     target: SWRDataSource,
     propertyKey: string,
@@ -64,12 +76,6 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
     };
   }
 
-  /**
-   * Perform SWR request.
-   *
-   * @param ctx The apollo context of the request
-   * @param args Function arguments passed to the revalidation fn
-   */
   private async doSWR(
     fn: Fn,
     propertyKey: string,
@@ -80,19 +86,29 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
     }:${propertyKey}:${sha1(args)}`;
 
     this.logger.debug(`Getting stale item with cache-key ${cacheKey}`);
-    const stale = await this.cache.get(cacheKey);
-    if (stale !== undefined) {
-      // instead of making current IO Loop process the fn,
-      // we put `revalidate` into the queue instead
-      setImmediate(() => this.revalidate(cacheKey, fn, ...args));
+    const cached = await this.cache.get(cacheKey);
+    if (cached !== undefined) {
+      const item: CacheItem = JSON.parse(cached);
 
-      this.logger.debug(
-        `Found stale item with cache-key ${cacheKey}! Returning Immediately.`
-      );
-      return JSON.parse(stale);
+      if (Date.now() >= item.exp) {
+        // item has become stale. need to revalidate.
+        // but instead of making current IO Loop process
+        // the 'revalidate' fn, we put the fn into
+        // the queue, and process it after this tick
+        setImmediate(() => this.revalidate(cacheKey, fn, ...args));
+        this.logger.debug(
+          `Found stale item with cache-key ${cacheKey}! Will perform revalidation.`
+        );
+      } else {
+        this.logger.debug(
+          `Found fresh item with cache-key ${cacheKey}! Will return without performing revalidation.`
+        );
+      }
+
+      return item.item;
     }
     this.logger.debug(
-      `NOT Found stale item with cache-key ${cacheKey}. Waiting for revalidation.`
+      `NOT Found cached item with cache-key ${cacheKey}. Waiting for revalidation.`
     );
     const fresh = await this.revalidate(cacheKey, fn, ...args);
     return fresh;
@@ -115,7 +131,13 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
     SWRDataSource.inflightDeduper[cacheKey] = promise;
 
     const result = await promise;
-    this.cache.set(cacheKey, JSON.stringify(result), { ttl: this.maxTTL });
+    const item: CacheItem = {
+      exp: Date.now() + this.ttlMaxAge * 1000,
+      item: result,
+    };
+    this.cache.set(cacheKey, JSON.stringify(item), {
+      ttl: this.ttlMaxAge + this.ttlSWR,
+    });
     delete SWRDataSource.inflightDeduper[cacheKey];
     this.logger.debug(
       `Revalidation for ${cacheKey} completed. Returning result.`

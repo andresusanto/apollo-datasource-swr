@@ -38,7 +38,14 @@ class MoviesAPI extends SWRDataSource<Context> {
   private endpoint: string;
 
   constructor(endpoint: string) {
-    super();
+    super({
+      // see https://datatracker.ietf.org/doc/html/rfc5861#section-3
+      // for explanation of how MaxAge and SWR behave.
+      ttlMaxAge: 10, // MaxAge in seconds.
+      ttlSWR: 3600, // SWR TTL in seconds.
+
+      logger: getLogger(), // apollo compatible Logger
+    });
     this.endpoint = endpoint;
   }
 

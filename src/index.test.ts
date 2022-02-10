@@ -5,10 +5,6 @@ test("performing revalidation when calling doSWR", async () => {
   const onRevalidate = jest.fn().mockImplementation(async (_, a) => "foo-" + a);
 
   class TestClassA extends SWRDataSource<string> {
-    public async tester() {
-      console.log(this);
-    }
-
     @SWRDataSource.useSWR
     public async testMethod(a: string, b: number) {
       return onRevalidate(this.context, a, b);
@@ -125,4 +121,113 @@ test("isolating cache and inflight-deduper for different subclasses", async () =
   expect(onRevalidateD_A).toBeCalledWith("ctx", "a", 2);
   expect(onRevalidateD_B).toBeCalledTimes(1);
   expect(onRevalidateD_B).toBeCalledWith("ctx", "a", 2);
+});
+
+test("should not revalidate when ttlMaxAge is provided and item is fresh", async () => {
+  const onRevalidate = jest.fn().mockImplementation(async (_, a) => "foo-" + a);
+
+  class TestClassE extends SWRDataSource<string> {
+    constructor() {
+      super({
+        ttlMaxAge: 0.05,
+        ttlSWR: 1,
+      });
+    }
+
+    @SWRDataSource.useSWR
+    public async testMethod(a: string, b: number) {
+      return onRevalidate(this.context, a, b);
+    }
+  }
+
+  const testClass = new TestClassE();
+  testClass.initialize({ context: "ctx", cache: new InMemoryLRUCache() });
+
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("foo-a");
+  expect(onRevalidate).toBeCalledTimes(1);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+
+  // item is considered fresh for 50ms
+  await new Promise((res) => setTimeout(res, 10));
+
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("foo-a");
+  await new Promise((res) => setImmediate(res));
+
+  expect(onRevalidate).toBeCalledTimes(1);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+});
+
+test("should serve stale item and revalidate when ttlMaxAge is provided and item is stale", async () => {
+  let requestNumber = 0;
+  const onRevalidate = jest
+    .fn()
+    .mockImplementation(async (_, a) => `${requestNumber++}-foo-` + a);
+
+  class TestClassF extends SWRDataSource<string> {
+    constructor() {
+      super({
+        ttlMaxAge: 0.05,
+        ttlSWR: 1,
+      });
+    }
+
+    @SWRDataSource.useSWR
+    public async testMethod(a: string, b: number) {
+      return onRevalidate(this.context, a, b);
+    }
+  }
+
+  const testClass = new TestClassF();
+  testClass.initialize({ context: "ctx", cache: new InMemoryLRUCache() });
+
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("0-foo-a");
+  expect(onRevalidate).toBeCalledTimes(1);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+
+  // item is considered fresh for 50ms
+  await new Promise((res) => setTimeout(res, 60));
+
+  // item is now stale
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("0-foo-a"); // should return stale item (0)
+  await new Promise((res) => setImmediate(res));
+
+  expect(onRevalidate).toBeCalledTimes(2);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+});
+
+test("should not serve stale item when it is older than the stale period", async () => {
+  let requestNumber = 0;
+  const onRevalidate = jest
+    .fn()
+    .mockImplementation(async (_, a) => `${requestNumber++}-foo-` + a);
+
+  class TestClassF extends SWRDataSource<string> {
+    constructor() {
+      super({
+        ttlMaxAge: 0.05,
+        ttlSWR: 0.05,
+      });
+    }
+
+    @SWRDataSource.useSWR
+    public async testMethod(a: string, b: number) {
+      return onRevalidate(this.context, a, b);
+    }
+  }
+
+  const testClass = new TestClassF();
+  testClass.initialize({ context: "ctx", cache: new InMemoryLRUCache() });
+
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("0-foo-a");
+  expect(onRevalidate).toBeCalledTimes(1);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+
+  // 50ms + 50ms = 100ms, item shouldn't exist in cache anymore
+  await new Promise((res) => setTimeout(res, 150));
+
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("1-foo-a"); // should return fresh item (1)
+  await new Promise((res) => setImmediate(res));
+
+  expect(onRevalidate).toBeCalledTimes(2);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
 });
