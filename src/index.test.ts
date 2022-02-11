@@ -298,3 +298,85 @@ test("using function logger", async () => {
 
   expect(objLogger.debug).toBeCalledTimes(5);
 });
+
+test("handling error", async () => {
+  const onRevalidate = jest.fn().mockImplementation(async (_, a) => {
+    throw new Error("test");
+  });
+
+  class TestClassI extends SWRDataSource<string> {
+    @SWRDataSource.useSWR
+    public async testMethod(a: string, b: number) {
+      return onRevalidate(this.context, a, b);
+    }
+  }
+
+  const testClass = new TestClassI();
+  testClass.initialize({ context: "ctx", cache: new InMemoryLRUCache() });
+
+  await expect(testClass.testMethod("a", 2)).rejects.toThrow("test");
+  expect(onRevalidate).toBeCalledTimes(1);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+
+  // we shouldn't cache error call
+  await expect(testClass.testMethod("a", 2)).rejects.toThrow("test");
+  expect(onRevalidate).toBeCalledTimes(2);
+  expect(onRevalidate).toHaveBeenNthCalledWith(2, "ctx", "a", 2);
+});
+
+test("handle background error", async () => {
+  const objLogger: Logger = {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+  };
+  let requestNumber = 0;
+  const onRevalidate = jest.fn().mockImplementation(async (_, a) => {
+    requestNumber += 1;
+    if (requestNumber >= 2) throw new Error("test");
+    return "ok" + requestNumber;
+  });
+
+  class TestClassJ extends SWRDataSource<string> {
+    constructor() {
+      super({
+        ttlSWR: 0.05,
+        logger: objLogger,
+      });
+    }
+    @SWRDataSource.useSWR
+    public async testMethod(a: string, b: number) {
+      return onRevalidate(this.context, a, b);
+    }
+  }
+
+  const testClass = new TestClassJ();
+  testClass.initialize({ context: "ctx", cache: new InMemoryLRUCache() });
+
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("ok1");
+  expect(onRevalidate).toBeCalledTimes(1);
+  expect(onRevalidate).toHaveBeenNthCalledWith(1, "ctx", "a", 2);
+
+  // we should return stale item
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("ok1");
+  await new Promise((res) => setImmediate(res));
+  expect(onRevalidate).toBeCalledTimes(2);
+
+  // we should log the background error
+  expect(objLogger.error).toHaveBeenCalledTimes(2);
+
+  // 10ms is still lower than our stale grace period
+  await new Promise((res) => setTimeout(res, 10));
+
+  // we should still return stale item
+  await expect(testClass.testMethod("a", 2)).resolves.toEqual("ok1");
+  await new Promise((res) => setImmediate(res));
+  expect(onRevalidate).toBeCalledTimes(3);
+  expect(objLogger.error).toHaveBeenCalledTimes(4); // 2 * 2
+
+  // after 50ms, we don't have any stale data anymore!!
+  await new Promise((res) => setTimeout(res, 50));
+  await expect(testClass.testMethod("a", 2)).rejects.toThrow("test");
+  expect(onRevalidate).toBeCalledTimes(4);
+});

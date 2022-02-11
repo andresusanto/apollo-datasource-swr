@@ -101,7 +101,14 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
         // but instead of making current IO Loop process
         // the 'revalidate' fn, we put the fn into
         // the queue, and process it after this tick
-        setImmediate(() => this.revalidate(cacheKey, fn, ...args));
+        setImmediate(() =>
+          this.revalidate(cacheKey, fn, ...args).catch((e) => {
+            this.logger().error(
+              `Error while performing background revalidation for ${cacheKey}`
+            );
+            this.logger().error(e);
+          })
+        );
         this.logger().debug(
           `Found stale item with cache-key ${cacheKey}! Will perform revalidation.`
         );
@@ -124,30 +131,33 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
     this.logger().debug(`Performing revalidation for ${cacheKey}.`);
     const inflight = SWRDataSource.inflightDeduper[cacheKey];
     if (inflight) {
-      this.logger().debug(
+      console.log(
         `Found inflight request for ${cacheKey}. Reusing the inflight instead of making a new one.`
       );
       return inflight;
     }
 
-    this.logger().debug(
-      `NOT found inflight request for ${cacheKey}. Making an underlying function call.`
-    );
-    const promise = fn(...args);
-    SWRDataSource.inflightDeduper[cacheKey] = promise;
+    try {
+      this.logger().debug(
+        `NOT found inflight request for ${cacheKey}. Making an underlying function call.`
+      );
+      const promise = fn(...args);
+      SWRDataSource.inflightDeduper[cacheKey] = promise;
 
-    const result = await promise;
-    const item: CacheItem = {
-      exp: Date.now() + this.ttlMaxAge * 1000,
-      item: result,
-    };
-    this.cache.set(cacheKey, JSON.stringify(item), {
-      ttl: this.ttlMaxAge + this.ttlSWR,
-    });
-    delete SWRDataSource.inflightDeduper[cacheKey];
-    this.logger().debug(
-      `Revalidation for ${cacheKey} completed. Returning result.`
-    );
-    return result;
+      const result = await promise;
+      const item: CacheItem = {
+        exp: Date.now() + this.ttlMaxAge * 1000,
+        item: result,
+      };
+      this.cache.set(cacheKey, JSON.stringify(item), {
+        ttl: this.ttlMaxAge + this.ttlSWR,
+      });
+      this.logger().debug(
+        `Revalidation for ${cacheKey} completed. Returning result.`
+      );
+      return result;
+    } finally {
+      delete SWRDataSource.inflightDeduper[cacheKey];
+    }
   }
 }
