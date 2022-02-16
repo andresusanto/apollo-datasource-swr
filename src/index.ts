@@ -131,7 +131,7 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
     this.logger().debug(`Performing revalidation for ${cacheKey}.`);
     const inflight = SWRDataSource.inflightDeduper[cacheKey];
     if (inflight) {
-      console.log(
+      this.logger().debug(
         `Found inflight request for ${cacheKey}. Reusing the inflight instead of making a new one.`
       );
       return inflight;
