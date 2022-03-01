@@ -1,13 +1,16 @@
-import { sha1 } from "object-hash";
+import { type Hasher, identify } from "object-identity";
 import { DataSource, DataSourceConfig } from "apollo-datasource";
 import { KeyValueCache, InMemoryLRUCache } from "apollo-server-caching";
 import { Logger } from "apollo-server-types";
+import { createHash } from 'node:crypto';
+
+const sha1: Hasher = (val: string) => createHash('sha1').update(val).digest('hex');
 
 const silentLogger: Logger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
+  debug: () => { },
+  info: () => { },
+  warn: () => { },
+  error: () => { },
 };
 
 type InflightDeduper = Record<string, Promise<any>>;
@@ -87,9 +90,8 @@ export abstract class SWRDataSource<TContext = any> extends DataSource {
     propertyKey: string,
     ...args: FnArg
   ): Promise<any> {
-    const cacheKey = `${SWRDataSource.name}:${
-      this.constructor.name
-    }:${propertyKey}:${sha1(args)}`;
+    const cacheKey = `${SWRDataSource.name}:${this.constructor.name
+      }:${propertyKey}:${identify(args, sha1)}`;
 
     this.logger().debug(`Getting stale item with cache-key ${cacheKey}`);
     const cached = await this.cache.get(cacheKey);
