@@ -1,6 +1,6 @@
 {
   "name": "apollo-datasource-swr",
-  "version": "2.2.2",
+  "version": "2.3.0",
   "description": "Apollo DataSource with SWR capability",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
